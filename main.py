@@ -2,7 +2,7 @@ import sys
 import os
 from datetime import timedelta
 from PySide6.QtCore import (
-    QPropertyAnimation, QEasingCurve, QTimer, QTime, Qt, Signal, Property, QEvent
+    QPropertyAnimation, QEasingCurve, QTimer, QTime, Qt, Signal, Property, QEvent, QDate
 )
 from PySide6.QtGui import QPainter
 from PySide6.QtWidgets import (
@@ -14,46 +14,50 @@ from PySide6.QtUiTools import QUiLoader
 
 
 class RotatableToolButton(QToolButton):
+    """Кнопка-стрелка, которая может отражаться по горизонтали (flip)."""
+
     def __init__(self, text="", parent=None):
         super().__init__(parent)
         self.setText(text)
-        self._rotation = 0.0
+        self._flip = 1.0  # 1 = обычная, -1 = отражённая
         self.setStyleSheet("QToolButton { border: none; background: transparent; font-size: 16px; }")
 
-    def get_rotation(self):
-        return self._rotation
+    def get_flip(self):
+        return self._flip
 
-    def set_rotation(self, angle):
-        self._rotation = angle
+    def set_flip(self, value):
+        self._flip = value
         self.update()
 
-    rotation = Property(float, get_rotation, set_rotation)
+    flip = Property(float, get_flip, set_flip)
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.save()
-        try:
-            painter.translate(self.width() / 2, self.height() / 2)
-            painter.rotate(self._rotation)
-            painter.translate(-self.width() / 2, -self.height() / 2)
+        painter.translate(self.width() / 2, self.height() / 2)
+        painter.scale(self._flip, 1.0)
+        painter.translate(-self.width() / 2, -self.height() / 2)
 
-            opt = QStyleOptionToolButton()
-            self.initStyleOption(opt)
-            self.style().drawComplexControl(QStyle.CC_ToolButton, opt, painter, self)
-        finally:
-            painter.restore()
-            painter.end()
+        opt = QStyleOptionToolButton()
+        self.initStyleOption(opt)
+        self.style().drawComplexControl(QStyle.CC_ToolButton, opt, painter, self)
+        painter.restore()
+        painter.end()
+
 
 class NewTaskWidget(QFrame):
+    """Виджет-строка для ввода новой задачи (используется как элемент списка)."""
+
     task_submitted = Signal(str, QTime)
 
     def __init__(self):
         super().__init__()
-        self.setFrameShape(QFrame.NoFrame)
+        self.setFrameShape(QFrame.Panel)
+        self.setFrameShadow(QFrame.Raised)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(5, 5, 5, 5)  # отступы, как в add_task
         layout.setSpacing(5)
 
         self.cb_done = QCheckBox()
@@ -64,11 +68,13 @@ class NewTaskWidget(QFrame):
         self.le_title.setPlaceholderText("Новая задача...")
         self.le_title.setFrame(False)
         self.le_title.setStyleSheet("QLineEdit { border-bottom: 1px solid gray; }")
-        self.le_title.returnPressed.connect(self.submit)
+        self.le_title.editingFinished.connect(self.submit)  # сохраняем при потере фокуса
 
         self.te_time = QTimeEdit()
         self.te_time.setDisplayFormat("H:mm:ss")
         self.te_time.setTime(QTime(0, 0))
+        self.te_time.setButtonSymbols(QAbstractSpinBox.NoButtons)  # убираем стрелки
+        self.te_time.setFrame(False)
         self.te_time.hide()
 
         layout.addWidget(self.cb_done)
@@ -105,6 +111,7 @@ class NewTaskWidget(QFrame):
         self.le_title.clear()
         self.show_extras(False)
 
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -112,123 +119,139 @@ class MainWindow(QMainWindow):
         # Загрузка UI
         loader = QUiLoader()
         ui_path = os.path.join(os.path.dirname(__file__), "mainwindow.ui")
-        self.ui = loader.load(ui_path)  # не передаём self как родителя!
+        self.ui = loader.load(ui_path)
         if self.ui is None:
             raise RuntimeError("Не удалось загрузить UI")
-
-        # Устанавливаем загруженный виджет как центральный
         self.setCentralWidget(self.ui)
 
-        # --- Замена кнопки на RotatableToolButton ---
+        # --- Настройка минимальных размеров
+        self.ui.gridLayout.setColumnStretch(0, 0)
+        self.ui.gridLayout.setColumnStretch(1, 0)
+        self.ui.gridLayout.setColumnStretch(2, 1)
+
+        # --- Замена кнопки TBT_open_clnd на RotatableToolButton ---
         old_btn = self.ui.TBT_open_clnd
         old_font = old_btn.font()
-        layout = self.ui.
-
-        # Удаляем старую кнопку
+        old_text = old_btn.text()
+        layout = self.ui.gridLayout
         layout.removeWidget(old_btn)
         old_btn.deleteLater()
 
-        # Создаём новую
-        self.ui.TBT_open_clnd = RotatableToolButton(">")
+        self.ui.TBT_open_clnd = RotatableToolButton(old_text)
         self.ui.TBT_open_clnd.setFont(old_font)
-
-        # Добавляем на то же место (row=0, col=1)
         layout.addWidget(self.ui.TBT_open_clnd, 0, 1, 1, 1)
-        # -------------------------------------------
 
-        # Настройка кнопки-стрелки
-        self.ui.TBT_open_clnd.setStyleSheet("QToolButton { border: none; background: transparent; font-size: 16px; }")
-
-        # Анимация панели календаря
+        # --- Анимации ---
         self.calendar_animation = QPropertyAnimation(self.ui.clnd_panel, b"maximumWidth")
         self.calendar_animation.setDuration(250)
         self.calendar_animation.setEasingCurve(QEasingCurve.InOutQuad)
 
-        # Анимация поворота кнопки
-        self.btn_rotation_animation = QPropertyAnimation(self.ui.TBT_open_clnd, b"rotation")
-        self.btn_rotation_animation.setDuration(250)
-        self.btn_rotation_animation.setEasingCurve(QEasingCurve.InOutQuad)
+        self.btn_flip_animation = QPropertyAnimation(self.ui.TBT_open_clnd, b"flip")
+        self.btn_flip_animation.setDuration(250)
+        self.btn_flip_animation.setEasingCurve(QEasingCurve.InOutQuad)
 
         self.window_animation = QPropertyAnimation(self, b"geometry")
         self.window_animation.setDuration(250)
         self.window_animation.setEasingCurve(QEasingCurve.InOutQuad)
 
-        # Виджет для новой задачи
-        self.new_task_widget = NewTaskWidget()
-        self.ui.gridLayout_2.addWidget(self.new_task_widget, 3, 0, 1, 2)
-        self.new_task_widget.task_submitted.connect(self.on_new_task_submitted)
+        self.current_flip = 1.0
+        self.btn_flip_animation.finished.connect(self.on_flip_animation_finished)
 
-        # Таймер
+        # --- Таймер (обратный отсчёт) ---
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_time_display)
         self.remaining_seconds = 0
         self.active_task_row = None
 
-        # Сигналы
+        # --- Сигналы ---
         self.ui.clnd.clicked.connect(self.on_calendar_date_clicked)
-        self.ui.bt_start_stop.clicked.connect(self.toggle_timer)
+        self.ui.BT_start_stop.clicked.connect(self.toggle_timer)
         self.ui.TBT_open_clnd.clicked.connect(self.toggle_calendar)
-        self.ui.lwdg_tasks.itemClicked.connect(self.on_task_item_clicked)
+        self.ui.LWDG_tasks.itemClicked.connect(self.on_task_item_clicked)
 
-        # Начальная ширина панели = 0
-        self.ui.clnd_panel.setMaximumWidth(0)
+        # Начальная ширина панели календаря = 0
         self.ui.clnd_panel.setMinimumWidth(0)
+        self.ui.clnd_panel.setMaximumWidth(0)
 
-        # Пример задачи
-        self.add_task("Пример задачи", "00:25:00")
+        # Устанавливаем текущую дату в лейбл
+        self.ui.LB_slctd_date.setText(QDate.currentDate().toString("dd/MM"))
+
+        # Пример задачи (можно удалить)
+        # self.add_task("Пример задачи", "00:25:00")
+
+        # Создаём первый редактор новой задачи
+        self.create_task_editor_item()
 
     # ===== Календарь =====
     def toggle_calendar(self):
         panel = self.ui.clnd_panel
         if panel.width() == 0:
             # Открываем
-            # Анимация панели
+            new_flip = -1.0
             self.calendar_animation.setStartValue(0)
             self.calendar_animation.setEndValue(250)
-
-            # Анимация поворота кнопки
-            self.btn_rotation_animation.setStartValue(0)
-            self.btn_rotation_animation.setEndValue(180)
-
-            # Анимация окна (увеличиваем ширину на 250)
             start_geom = self.geometry()
             end_geom = start_geom.adjusted(0, 0, 250, 0)
-            self.window_animation.setStartValue(start_geom)
-            self.window_animation.setEndValue(end_geom)
         else:
             # Закрываем
+            new_flip = 1.0
             self.calendar_animation.setStartValue(panel.width())
             self.calendar_animation.setEndValue(0)
-
-            self.btn_rotation_animation.setStartValue(180)
-            self.btn_rotation_animation.setEndValue(0)
-
-            # Анимация окна (уменьшаем ширину на 250)
             start_geom = self.geometry()
             end_geom = start_geom.adjusted(0, 0, -250, 0)
-            self.window_animation.setStartValue(start_geom)
-            self.window_animation.setEndValue(end_geom)
 
-        # Запускаем все анимации одновременно
+        # Анимация отражения кнопки
+        self.btn_flip_animation.setStartValue(self.current_flip)
+        self.btn_flip_animation.setEndValue(new_flip)
+
+        # Анимация окна
+        self.window_animation.setStartValue(start_geom)
+        self.window_animation.setEndValue(end_geom)
+
         self.calendar_animation.start()
-        self.btn_rotation_animation.start()
         self.window_animation.start()
+        self.btn_flip_animation.start()
+
+    def on_flip_animation_finished(self):
+        self.current_flip = self.ui.TBT_open_clnd.flip
 
     def on_calendar_date_clicked(self, date):
-        self.ui.de_slct_date.setDate(date)
+        self.ui.LB_slctd_date.setText(date.toString("dd/MM"))
+
+    # ===== Редактор новой задачи (элемент списка) =====
+    def create_task_editor_item(self):
+        editor_widget = NewTaskWidget()
+        item = QListWidgetItem()
+        item.setSizeHint(editor_widget.sizeHint())
+        self.ui.LWDG_tasks.addItem(item)
+        self.ui.LWDG_tasks.setItemWidget(item, editor_widget)
+
+        editor_widget.task_submitted.connect(
+            lambda title, time, it=item: self.on_editor_submitted(it, title, time)
+        )
+        item.setData(Qt.UserRole, {'type': 'editor'})
+
+        self.ui.LWDG_tasks.setCurrentItem(item)
+        editor_widget.le_title.setFocus()
+
+    def on_editor_submitted(self, editor_item, title, time):
+        time_str = time.toString("H:mm:ss")
+        row = self.ui.LWDG_tasks.row(editor_item)
+        self.ui.LWDG_tasks.takeItem(row)
+
+        self.add_task(title, time_str)
+        self.create_task_editor_item()
 
     # ===== Список задач =====
-    def on_new_task_submitted(self, title, time):
-        time_str = time.toString("H:mm:ss")
-        self.add_task(title, time_str)
-
     def add_task(self, title, time_str="00:00:00"):
         row_widget = QFrame()
         row_widget.setFrameShape(QFrame.Panel)
         row_widget.setFrameShadow(QFrame.Raised)
 
         layout = QHBoxLayout(row_widget)
+        layout.setContentsMargins(5, 0, 5, 0)  # отступы слева/справа
         cb_done = QCheckBox()
+        cb_done.setFixedWidth(20)
         le_title = QLineEdit()
         le_title.setText(title)
         le_title.setFrame(False)
@@ -245,8 +268,8 @@ class MainWindow(QMainWindow):
 
         item = QListWidgetItem()
         item.setSizeHint(row_widget.sizeHint())
-        self.ui.lwdg_tasks.addItem(item)
-        self.ui.lwdg_tasks.setItemWidget(item, row_widget)
+        self.ui.LWDG_tasks.addItem(item)
+        self.ui.LWDG_tasks.setItemWidget(item, row_widget)
 
         item.setData(Qt.UserRole, {
             'widget': row_widget,
@@ -263,11 +286,15 @@ class MainWindow(QMainWindow):
         return item
 
     def on_task_item_clicked(self, item):
+        # Игнорируем клики по редактору новой задачи
+        data = item.data(Qt.UserRole)
+        if data and data.get('type') == 'editor':
+            return
         self.set_active_task(item)
 
     def delete_task(self, item):
-        row = self.ui.lwdg_tasks.row(item)
-        self.ui.lwdg_tasks.takeItem(row)
+        row = self.ui.LWDG_tasks.row(item)
+        self.ui.LWDG_tasks.takeItem(row)
 
     def on_task_checked(self, item, state):
         data = item.data(Qt.UserRole)
@@ -286,7 +313,7 @@ class MainWindow(QMainWindow):
         data = item.data(Qt.UserRole)
         time_text = data['lb_timer'].text()
         h, m, s = map(int, time_text.split(':'))
-        self.ui.te_task_time.setTime(QTime(h, m, s))
+        self.ui.TE_task_time.setTime(QTime(h, m, s))
         self.stop_timer()
 
     # ===== Таймер =====
@@ -299,26 +326,26 @@ class MainWindow(QMainWindow):
     def start_timer(self):
         if self.active_task_row is None:
             return
-        time = self.ui.te_task_time.time()
+        time = self.ui.TE_task_time.time()
         self.remaining_seconds = time.hour() * 3600 + time.minute() * 60 + time.second()
         self.timer.start(1000)
-        self.ui.bt_start_stop.setText("II")
+        self.ui.BT_start_stop.setText("II")
 
     def stop_timer(self):
         self.timer.stop()
-        self.ui.bt_start_stop.setText("▶")
+        self.ui.BT_start_stop.setText("▶")
         if self.active_task_row is not None:
             data = self.active_task_row.data(Qt.UserRole)
             td = timedelta(seconds=self.remaining_seconds)
             data['lb_timer'].setText(str(td))
-            self.ui.te_task_time.setTime(QTime(0, 0).addSecs(self.remaining_seconds))
+            self.ui.TE_task_time.setTime(QTime(0, 0).addSecs(self.remaining_seconds))
 
     def update_time_display(self):
         self.remaining_seconds -= 1
         if self.remaining_seconds <= 0:
             self.remaining_seconds = 0
             self.stop_timer()
-        self.ui.te_task_time.setTime(QTime(0, 0).addSecs(self.remaining_seconds))
+        self.ui.TE_task_time.setTime(QTime(0, 0).addSecs(self.remaining_seconds))
         if self.active_task_row is not None:
             data = self.active_task_row.data(Qt.UserRole)
             data['lb_timer'].setText(str(timedelta(seconds=self.remaining_seconds)))
