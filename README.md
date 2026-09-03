@@ -1,5 +1,3 @@
-установить зависимости
-pip install -r requirements.txt
+установить зависимости\pip install -r requirements.txt
 
-запуск дизайнера
-pyside6-designer
+запуск дизайнера\pyside6-designer
